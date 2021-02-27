@@ -9,6 +9,14 @@ in `dr_wav.h`).
 
 # Installation
 
+Available on [luarocks](https://luarocks.org/modules/jprjr/luawav):
+
+```bash
+luarocks install luawav
+```
+
+Available on [AUR](https://aur.archlinux.org/pkgbase/lua-luawav/)
+
 ## Building from source
 
 You can build with luarocks or cmake.
