@@ -177,6 +177,26 @@ Initializes a drwav object for reading. The second parameter can
 be either a string (representing a filename), or a table
 of parameters for callback-based reading.
 
+The `params` table requires either a filename, or methods
+for reading and seeking in a file, with optional user data.
+
+It can also contain an `onChunk` callback, with a `chunkUserData`.
+
+There's also an optional `flags` parameter, currently the only valid flag
+is `DRWAV_SEQUENTIAL`, which ensures seek is only called with forwards,
+relative seeks, and disables the onChunk callback.
+
+All of these are valid calls to `drwav_init`:
+
+* ` drwav_init(state, "file.wav")` -- opens a WAV file for reading.
+* ` drwav_init(state, { filename = "file.wav" })` -- opens a WAV file for reading.
+* ` drwav_init(state, { filename = "file.wav", flags = wav.DRWAV_SEQUENTIAL })` -- opens a WAV file for reading, no
+seeking besides seeking forward.
+* ` drwav_init(state, { filename = "file.wav", onChunk = f, chunkUserData = u })` -- opens a WAV file for reading, with an `onChunk` callback
+* ` drwav_init(state, { onRead = read, onSeek = seek, userData = u })` -- opens a WAV stream for reading via callbacks.
+* ` drwav_init(state, { onRead = read, onSeek = seek, userData = u, onChunk = f, chunkUserData = uc })` -- opens a WAV stream for reading via callbacks, with an `onChunk` callback
+* ` drwav_init(state, { onRead = read, onSeek = seek, userData = u, onChunk = f, chunkUserData = uc })` -- opens a WAV stream for reading via callbacks, with an `onChunk` callback
+
 Returns a table with the opened WAV file's format information,
 all values are integers, except for `subFormat`.
 
@@ -195,10 +215,11 @@ Here are the keys for the returned table:
 | channelMask | The channel mask |
 | subFormat | The sub-format, as specified by the WAV file |
 
-Here are the keys for the `params` table (to use custom read callbacks):
+Here are the keys for the `params` table.
 
 | Key | Description |
 |-----|-------------|
+| filename | string representing the filename |
 | onRead | onRead callback |
 | onSeek | onSeek callback |
 | userData | Data to pass to onRead and onSeek callbacks |
@@ -224,6 +245,7 @@ If you're using callbacks, the table should have the following keys:
 
 | Key | Description |
 |-----|-------------|
+| filename | string representing a filename |
 | onWrite | callback when data needs to be written |
 | onSeek  | callback when file position needs to be seeked |
 | userdata | userdata for onWrite and onSeek |
