@@ -1,5 +1,5 @@
 local VERSION_MAJOR = 1
-local VERSION_MINOR = 0
+local VERSION_MINOR = 1
 local VERSION_PATCH = 0
 
 return {
