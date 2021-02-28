@@ -13,25 +13,34 @@
 LUAWAV_PRIVATE
 const char * const luawav_mt = "drwav";
 
+/* used on the read, seek, write callbacks */
+struct luawav_stream_userdata_s {
+    lua_State *L;
+    int table_ref;
+};
+
+typedef struct luawav_stream_userdata_s  luawav_stream_userdata;
+
+/* used on the read, seek, write callbacks */
+struct luawav_chunk_userdata_s {
+    lua_State *L;
+    int table_ref;
+};
+
+typedef struct luawav_chunk_userdata_s  luawav_chunk_userdata;
+
 struct luawav_userdata_s {
+    luawav_stream_userdata stream;
+    luawav_chunk_userdata chunk;
     drwav wav;
     drwav_data_format format;
-    lua_State *L;
     float pcm_float[F32_BUFFER];
     drwav_int32 *pcm_int32;
     drwav_int16 *pcm_int16;
-    int table_ref;
     int (*write)(lua_State *L, struct luawav_userdata_s *u);
 };
 
 typedef struct luawav_userdata_s luawav_userdata;
-
-struct luawav_mini_userdata_s {
-    lua_State *L;
-    int table_ref;
-};
-
-typedef struct luawav_mini_userdata_s luawav_mini_userdata;
 
 struct luawav_const_s {
     const char *name;
@@ -186,7 +195,7 @@ luawav_tofmt(lua_State *L, int idx, drwav_data_format *fmt) {
 }
 
 static size_t luawav_read_proc(void *userdata, void *bufferout, size_t bytesToRead) {
-    luawav_userdata *u = (luawav_userdata *)userdata;
+    luawav_stream_userdata *u = (luawav_stream_userdata *)userdata;
     const char *data = 0;
     size_t datalen = 0;
 
@@ -205,7 +214,7 @@ static size_t luawav_read_proc(void *userdata, void *bufferout, size_t bytesToRe
 }
 
 static size_t luawav_write_proc(void *userdata, const void *bufferout, size_t bytesToWrite) {
-    luawav_userdata *u = (luawav_userdata *)userdata;
+    luawav_stream_userdata *u = (luawav_stream_userdata *)userdata;
     size_t written = 0;
 
     lua_rawgeti(u->L,LUA_REGISTRYINDEX,u->table_ref);
@@ -221,7 +230,7 @@ static size_t luawav_write_proc(void *userdata, const void *bufferout, size_t by
 }
 
 static drwav_bool32 luawav_seek_proc(void *userdata, int offset, drwav_seek_origin origin) {
-    luawav_userdata *u = (luawav_userdata *)userdata;
+    luawav_stream_userdata *u = (luawav_stream_userdata *)userdata;
     drwav_bool32 r = 0;
     lua_rawgeti(u->L,LUA_REGISTRYINDEX, u->table_ref);
     lua_getfield(u->L,-1,"onSeek");
@@ -239,21 +248,16 @@ static drwav_bool32 luawav_seek_proc(void *userdata, int offset, drwav_seek_orig
 }
 
 static drwav_uint64
-luawav_chunk_proc(void *chunkUserData, drwav_read_proc onRead, drwav_seek_proc onSeek, void *readseekUserData, const drwav_chunk_header *pChunkHeader, drwav_container container, const drwav_fmt *fmt) {
-    luawav_userdata *u = (luawav_userdata *)chunkUserData;
+luawav_chunk_proc(void *chunkUserData, drwav_read_proc onRead, drwav_seek_proc onSeek, void *readSeekUserData, const drwav_chunk_header *pChunkHeader, drwav_container container, const drwav_fmt *fmt) {
+    luawav_chunk_userdata *u = (luawav_chunk_userdata *)chunkUserData;
+    luawav_stream_userdata *s = (luawav_stream_userdata *)readSeekUserData;
     drwav_uint64 r = 0;
 
     lua_rawgeti(u->L,LUA_REGISTRYINDEX, u->table_ref);
     lua_getfield(u->L,-1,"onChunk");
     lua_getfield(u->L,-2,"chunkUserData");
 
-    lua_newtable(u->L); /* fileops */
-    lua_getfield(u->L,-4,"userData");
-    lua_setfield(u->L,-2,"userData");
-    lua_getfield(u->L,-4,"onRead");
-    lua_setfield(u->L,-2,"onRead");
-    lua_getfield(u->L,-4,"onSeek");
-    lua_setfield(u->L,-2,"onSeek");
+    lua_rawgeti(s->L,LUA_REGISTRYINDEX,s->table_ref);
 
     lua_newtable(u->L); /* chunk_header */
 
@@ -279,7 +283,6 @@ luawav_chunk_proc(void *chunkUserData, drwav_read_proc onRead, drwav_seek_proc o
 
     (void)onRead;
     (void)onSeek;
-    (void)readseekUserData;
 
     return r;
 }
@@ -311,8 +314,11 @@ luawav_drwav(lua_State *L) {
     }
     luaL_setmetatable(L,luawav_mt);
 
-    lua_newtable(L);
-    u->table_ref = luaL_ref(L,LUA_REGISTRYINDEX);
+    u->stream.L = NULL;
+    u->chunk.L = NULL;
+
+    u->stream.table_ref = LUA_NOREF;
+    u->chunk.table_ref = LUA_NOREF;
 
     memset(u->pcm_float,0,sizeof(float) * F32_BUFFER);
     u->pcm_int32 = (drwav_int32 *)u->pcm_float;
@@ -328,9 +334,15 @@ luawav_uninit(lua_State *L) {
     u = luaL_checkudata(L,1,luawav_mt);
 
     drwav_uninit(&u->wav);
-    if(u->table_ref != LUA_NOREF) {
-        luaL_unref(L,LUA_REGISTRYINDEX,u->table_ref);
-        u->table_ref = LUA_NOREF;
+
+    if(u->stream.table_ref != LUA_NOREF) {
+        luaL_unref(L,LUA_REGISTRYINDEX,u->stream.table_ref);
+        u->stream.table_ref = LUA_NOREF;
+    }
+
+    if(u->chunk.table_ref != LUA_NOREF) {
+        luaL_unref(L,LUA_REGISTRYINDEX,u->chunk.table_ref);
+        u->chunk.table_ref = LUA_NOREF;
     }
 
     return 0;
@@ -371,31 +383,33 @@ luawav_init_write(lua_State *L) {
         return luaL_error(L,"format not supported");
     }
 
-    u->L = L;
-
     if(filename == NULL) {
-        lua_rawgeti(L,LUA_REGISTRYINDEX,u->table_ref);
-    
+        u->stream.L = L;
+        if(u->stream.table_ref != LUA_NOREF) {
+            luaL_unref(L,LUA_REGISTRYINDEX,u->stream.table_ref);
+        }
+        lua_newtable(L);
+
         lua_getfield(L,2,"onWrite");
         if(lua_isnil(L,-1)) {
             return luaL_error(L,"missing required onWrite function");
         }
         lua_setfield(L,-2,"onWrite");
-    
+
         lua_getfield(L,2,"totalSamples");
         if(!lua_isnil(L,-1)) {
             seq = 1;
             totalSamples = luawav_touint64(L,-1);
         }
         lua_pop(L,1);
-    
+
         lua_getfield(L,2,"totalFrames");
         if(!lua_isnil(L,-1)) {
             seq = 2;
             totalSamples = luawav_touint64(L,-1);
         }
         lua_pop(L,1);
-    
+
         if(seq== 0) {
             lua_getfield(L,2,"onSeek");
             if(lua_isnil(L,-1)) {
@@ -403,31 +417,32 @@ luawav_init_write(lua_State *L) {
             }
             lua_setfield(L,-2,"onSeek");
         }
-    
+
         lua_getfield(L,2,"userData");
         lua_setfield(L,-2,"userData");
 
+        u->stream.table_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
         if(seq == 0) {
             lua_pushboolean(L,drwav_init_write(&u->wav,
                 &u->format,
                 luawav_write_proc,
                 luawav_seek_proc,
-                u,
+                &u->stream,
                 NULL));
         } else if(seq == 1) {
             lua_pushboolean(L,drwav_init_write_sequential(&u->wav,
                 &u->format,
                 totalSamples,
                 luawav_write_proc,
-                u,
+                &u->stream,
                 NULL));
         } else if(seq == 2) {
             lua_pushboolean(L,drwav_init_write_sequential_pcm_frames(&u->wav,
                 &u->format,
                 totalSamples,
                 luawav_write_proc,
-                u,
+                &u->stream,
                 NULL));
         }
     }
@@ -441,74 +456,150 @@ luawav_init_write(lua_State *L) {
     return 1;
 }
 
+/* can be called as
+ * wav:init(filename) or
+ * wav:init({
+ *   filename = filename,
+ *   onChunk = onChunk
+ * }) or
+ * wav:init({
+ *   onRead = onRead,
+ *   onSeek = onSeek,
+ *   onChunk = onChunk
+ * }) */
+
 static int
-luawav_init(lua_State *L) {
+luawav_init_file(lua_State *L, luawav_userdata *u, const char *filename) {
+    /* checks if parameter 2 is a file, or table with an onChunk callback and
+     * flags */
     int ex = 0;
-    int r = 0;
-    luawav_userdata *u = NULL;
-    const char *filename = NULL;
     drwav_uint32 flags = 0;
+    int r = 0;
 
-    if(lua_isstring(L,2)) {
-        filename = lua_tostring(L,2);
-    } else if(!lua_istable(L,2)) {
-        return luaL_error(L,"missing required parameter: filename or table");
-    }
-
-    u = luaL_checkudata(L,1,luawav_mt);
-    u->L = L;
-    if(filename == NULL) {
-        lua_rawgeti(L,LUA_REGISTRYINDEX,u->table_ref);
-
-        lua_getfield(L,2,"onRead");
-        if(lua_isnil(L,-1)) {
-            return luaL_error(L,"missing required onRead function");
-        }
-        lua_setfield(L,-2,"onRead");
-
-        lua_getfield(L,2,"onSeek");
-        if(lua_isnil(L,-1)) {
-            return luaL_error(L,"missing required onSeek function");
-        }
-        lua_setfield(L,-2,"onSeek");
-
-        lua_getfield(L,2,"userData");
-        lua_setfield(L,-2,"userData");
-
-        lua_getfield(L,2,"flags");
-        if(lua_isnumber(L,-1)) {
-            flags = lua_tointeger(L,-1);
-        }
-        lua_pop(L,1);
-
+    if(lua_istable(L,2)) {
         lua_getfield(L,2,"onChunk");
         if(!lua_isnil(L,-1)) {
-            ex = 1;
+            lua_newtable(L);
+            lua_insert(L,-2);
             lua_setfield(L,-2,"onChunk");
             lua_getfield(L,2,"chunkUserData");
             lua_setfield(L,-2,"chunkUserData");
+            lua_getfield(L,2,"flags");
+            if(!lua_isnil(L,-1)) {
+                flags = lua_tointeger(L,-1);
+            }
+            lua_pop(L,1);
+            u->chunk.table_ref = luaL_ref(L,LUA_REGISTRYINDEX);
+            ex = 1;
         } else {
             lua_pop(L,1);
         }
+    }
 
-        if(ex) {
-            r = drwav_init_ex(&u->wav,
-              luawav_read_proc,
-              luawav_seek_proc,
-              luawav_chunk_proc,
-              u,
-              u,
-              flags,
-              NULL);
-        } else {
-            r = drwav_init(&u->wav,
-              luawav_read_proc,
-              luawav_seek_proc,
-              u,
-              NULL);
-        }
+    if(ex) {
+        r = drwav_init_file_ex(&u->wav,filename,luawav_chunk_proc,&u->chunk, flags, NULL);
     } else {
         r = drwav_init_file(&u->wav,filename,NULL);
+    }
+    return r;
+}
+
+static int
+luawav_init_stream(lua_State *L, luawav_userdata *u) {
+    int ex = 0;
+    int r = 0;
+    drwav_uint32 flags = 0;
+
+    lua_newtable(L);
+
+    lua_getfield(L,2,"onRead");
+    if(lua_isnil(L,-1)) {
+        return luaL_error(L,"missing required onRead function");
+    }
+    lua_setfield(L,-2,"onRead");
+
+    lua_getfield(L,2,"onSeek");
+    if(lua_isnil(L,-1)) {
+        return luaL_error(L,"missing required onSeek function");
+    }
+    lua_setfield(L,-2,"onSeek");
+
+    lua_getfield(L,2,"userData");
+    lua_setfield(L,-2,"userData");
+
+    u->stream.table_ref = luaL_ref(L,LUA_REGISTRYINDEX);
+
+    lua_getfield(L,2,"flags");
+    if(lua_isnumber(L,-1)) {
+        flags = lua_tointeger(L,-1);
+    }
+    lua_pop(L,1);
+
+    lua_getfield(L,2,"onChunk");
+    if(!lua_isnil(L,-1)) {
+        ex = 1;
+        lua_newtable(L);
+        lua_insert(L,-2);
+        lua_setfield(L,-2,"onChunk");
+        lua_getfield(L,2,"chunkUserData");
+        lua_setfield(L,-2,"chunkUserData");
+        u->chunk.table_ref = luaL_ref(L,LUA_REGISTRYINDEX);
+    } else {
+        lua_pop(L,1);
+    }
+
+    if(ex) {
+        r = drwav_init_ex(&u->wav,
+          luawav_read_proc,
+          luawav_seek_proc,
+          luawav_chunk_proc,
+          &u->stream,
+          &u->chunk,
+          flags,
+          NULL);
+    } else {
+        r = drwav_init(&u->wav,
+          luawav_read_proc,
+          luawav_seek_proc,
+          &u->stream,
+          NULL);
+    }
+    return r;
+}
+
+static int
+luawav_init(lua_State *L) {
+    int r = 0;
+    luawav_userdata *u = NULL;
+    const char *filename = NULL;
+
+    u = luaL_checkudata(L,1,luawav_mt);
+
+    if(u->stream.table_ref != LUA_NOREF) {
+        luaL_unref(L,LUA_REGISTRYINDEX,u->stream.table_ref);
+        u->stream.table_ref = LUA_NOREF;
+    }
+    if(u->chunk.table_ref != LUA_NOREF) {
+        luaL_unref(L,LUA_REGISTRYINDEX,u->chunk.table_ref);
+        u->chunk.table_ref = LUA_NOREF;
+    }
+    u->stream.L = L;
+    u->chunk.L = L;
+
+    if(lua_isstring(L,2)) {
+        filename = lua_tostring(L,2);
+        r = luawav_init_file(L,u,filename);
+    } else if(lua_istable(L,2)) {
+        lua_getfield(L,2,"filename");
+        if(!lua_isnil(L,-1)) {
+            filename = lua_tostring(L,-1);
+            lua_pop(L,1);
+            r = luawav_init_file(L,u,filename);
+        }
+        lua_pop(L,1);
+        r = luawav_init_stream(L,u);
+    } else {
+        return luaL_error(L,"invalid parameters");
     }
 
     if(!r) {
@@ -517,7 +608,9 @@ luawav_init(lua_State *L) {
         luawav_push_fmt(L,&u->wav.fmt);
     }
     return 1;
+
 }
+
 
 static int
 luawav_read_pcm_frames_f32(lua_State *L) {
@@ -636,157 +729,39 @@ luawav_version_string(lua_State *L) {
     return 1;
 }
 
-static int
-luawav_open_file_and_read_pcm_frames_f32(lua_State *L) {
-    const char *filename = NULL;
-    unsigned int channels = 0;
-    unsigned int sampleRate = 0;
-    drwav_uint64 frameCount = 0;
-    float *samples = NULL;
-    drwav_uint64 i = 0;
-    drwav_uint64 m = 0;
-
-    filename = lua_tostring(L,1);
-
-    samples = drwav_open_file_and_read_pcm_frames_f32(
-      filename,
-      &channels,
-      &sampleRate,
-      &frameCount,
-      NULL);
-    if(samples) {
-        lua_newtable(L);
-        lua_pushinteger(L,channels);
-        lua_setfield(L,-2,"channels");
-        lua_pushinteger(L,sampleRate);
-        lua_setfield(L,-2,"sampleRate");
-        luawav_pushuint64(L,frameCount);
-        lua_setfield(L,-2,"frameCount");
-
-        m = frameCount * (drwav_uint64)channels;
-        lua_createtable(L, m, 0);
-        while(i < m) {
-            lua_pushnumber(L,samples[i]);
-            lua_rawseti(L,-2,++i);
-        }
-        lua_setfield(L,-2,"samples");
-        drwav_free(samples, NULL);
-    } else {
-        lua_pushnil(L);
-    }
-    return 1;
-}
-
-static int
-luawav_open_file_and_read_pcm_frames_s32(lua_State *L) {
-    const char *filename = NULL;
-    unsigned int channels = 0;
-    unsigned int sampleRate = 0;
-    drwav_uint64 frameCount = 0;
-    drwav_int32 *samples = NULL;
-    drwav_uint64 i = 0;
-    drwav_uint64 m = 0;
-
-    filename = lua_tostring(L,1);
-
-    samples = drwav_open_file_and_read_pcm_frames_s32(
-      filename,
-      &channels,
-      &sampleRate,
-      &frameCount,
-      NULL);
-    if(samples) {
-        lua_newtable(L);
-        lua_pushinteger(L,channels);
-        lua_setfield(L,-2,"channels");
-        lua_pushinteger(L,sampleRate);
-        lua_setfield(L,-2,"sampleRate");
-        luawav_pushuint64(L,frameCount);
-        lua_setfield(L,-2,"frameCount");
-
-        m = frameCount * (drwav_uint64)channels;
-        lua_createtable(L, m, 0);
-        while(i < m) {
-            lua_pushinteger(L,samples[i]);
-            lua_rawseti(L,-2,++i);
-        }
-        lua_setfield(L,-2,"samples");
-        drwav_free(samples, NULL);
-    } else {
-        lua_pushnil(L);
-    }
-    return 1;
-}
-
 static void
-luawav_push_f32_samples(lua_State *L, float *samples, unsigned int channels, unsigned int sampleRate, drwav_uint64 frameCount) {
+luawav_push_f32_samples(lua_State *L, float *samples, drwav_uint64 sampleCount) {
     drwav_uint64 i = 0;
-    drwav_uint64 m = 0;
-
-    lua_newtable(L);
-    lua_pushinteger(L,channels);
-    lua_setfield(L,-2,"channels");
-    lua_pushinteger(L,sampleRate);
-    lua_setfield(L,-2,"sampleRate");
-    luawav_pushuint64(L,frameCount);
-    lua_setfield(L,-2,"frameCount");
-
-    m = frameCount * (drwav_uint64)channels;
-    lua_createtable(L, m, 0);
-    while(i < m) {
+    lua_createtable(L,sampleCount,0);
+    while(i<sampleCount) {
         lua_pushnumber(L,samples[i]);
         lua_rawseti(L,-2,++i);
     }
-    lua_setfield(L,-2,"samples");
 }
 
 static void
-luawav_push_s32_samples(lua_State *L, drwav_int32 *samples, unsigned int channels, unsigned int sampleRate, drwav_uint64 frameCount) {
+luawav_push_s32_samples(lua_State *L, drwav_int32 *samples, drwav_uint64 sampleCount) {
     drwav_uint64 i = 0;
-    drwav_uint64 m = 0;
-
-    lua_newtable(L);
-    lua_pushinteger(L,channels);
-    lua_setfield(L,-2,"channels");
-    lua_pushinteger(L,sampleRate);
-    lua_setfield(L,-2,"sampleRate");
-    luawav_pushuint64(L,frameCount);
-    lua_setfield(L,-2,"frameCount");
-
-    m = frameCount * (drwav_uint64)channels;
-    lua_createtable(L, m, 0);
-    while(i < m) {
+    lua_createtable(L,sampleCount,0);
+    while(i<sampleCount) {
         lua_pushinteger(L,samples[i]);
         lua_rawseti(L,-2,++i);
     }
-    lua_setfield(L,-2,"samples");
 }
 
 static void
-luawav_push_s16_samples(lua_State *L, drwav_int16 *samples, unsigned int channels, unsigned int sampleRate, drwav_uint64 frameCount) {
+luawav_push_s16_samples(lua_State *L, drwav_int16 *samples, drwav_uint64 sampleCount) {
     drwav_uint64 i = 0;
-    drwav_uint64 m = 0;
-
-    lua_newtable(L);
-    lua_pushinteger(L,channels);
-    lua_setfield(L,-2,"channels");
-    lua_pushinteger(L,sampleRate);
-    lua_setfield(L,-2,"sampleRate");
-    luawav_pushuint64(L,frameCount);
-    lua_setfield(L,-2,"frameCount");
-
-    m = frameCount * (drwav_uint64)channels;
-    lua_createtable(L, m, 0);
-    while(i < m) {
+    lua_createtable(L,sampleCount,0);
+    while(i<sampleCount) {
         lua_pushinteger(L,samples[i]);
         lua_rawseti(L,-2,++i);
     }
-    lua_setfield(L,-2,"samples");
 }
 
 typedef void *(*luawav_open_and_read_func)(drwav_read_proc onRead, drwav_seek_proc onSeek, void* pUserData, unsigned int* channelsOut, unsigned int* sampleRateOut, drwav_uint64* totalFrameCountOut, const drwav_allocation_callbacks* pAllocationCallbacks);
 typedef void *(*luawav_open_and_read_file_func)(const char *filename, unsigned int* channelsOut, unsigned int* sampleRateOut, drwav_uint64* totalFrameCountOut, const drwav_allocation_callbacks* pAllocationCallbacks);
-typedef void (*luawav_push_samples_func)(lua_State *L, void *samples, unsigned int channels, unsigned int sampleRate, unsigned int frameCount);
+typedef void (*luawav_push_samples_func)(lua_State *L, void *samples, drwav_uint64 sampleCount);
 
 static int
 luawav_open_and_read_pcm_frames(lua_State *L) {
@@ -795,7 +770,7 @@ luawav_open_and_read_pcm_frames(lua_State *L) {
     unsigned int sampleRate = 0;
     drwav_uint64 frameCount = 0;
     void *samples = NULL;
-    luawav_mini_userdata u;
+    luawav_stream_userdata u;
     luawav_open_and_read_func f = NULL;
     luawav_open_and_read_file_func file_f = NULL;
     luawav_push_samples_func push = NULL;
@@ -849,7 +824,15 @@ luawav_open_and_read_pcm_frames(lua_State *L) {
     }
 
     if(samples) {
-        push(L, samples, channels, sampleRate, frameCount);
+        lua_newtable(L);
+        lua_pushinteger(L,channels);
+        lua_setfield(L,-2,"channels");
+        lua_pushinteger(L,sampleRate);
+        lua_setfield(L,-2,"sampleRate");
+        luawav_pushuint64(L,frameCount);
+        lua_setfield(L,-2,"frameCount");
+        push(L, samples, channels * frameCount);
+        lua_setfield(L,-2,"samples");
         drwav_free(samples, NULL);
     } else {
         lua_pushnil(L);
