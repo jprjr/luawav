@@ -3,7 +3,7 @@
 #if !defined(luaL_newlibtable) \
   && (!defined LUA_VERSION_NUM || LUA_VERSION_NUM==501)
 #include <string.h>
-LUAFLAC_PRIVATE
+LUAWAV_PRIVATE
 void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
     luaL_checkstack(L, nup+1, "too many upvalues");
     for (; l->name != NULL; l++) {  /* fill the table with given functions */
@@ -17,14 +17,14 @@ void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
     lua_pop(L, nup);  /* remove upvalues */
 }
 
-LUAFLAC_PRIVATE
+LUAWAV_PRIVATE
 void luaL_setmetatable(lua_State *L, const char *str) {
     luaL_checkstack(L, 1, "not enough stack slots");
     luaL_getmetatable(L, str);
     lua_setmetatable(L, -2);
 }
 
-LUAFLAC_PRIVATE
+LUAWAV_PRIVATE
 void *luaL_testudata (lua_State *L, int i, const char *tname) {
     void *p = lua_touserdata(L, i);
     luaL_checkstack(L, 2, "not enough stack slots");
