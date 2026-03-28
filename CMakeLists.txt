@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.10)
 project(luawav)
 
 option(BUILD_SHARED_LIBS "Build modules as shared libraries" ON)

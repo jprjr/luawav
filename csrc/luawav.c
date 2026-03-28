@@ -235,16 +235,30 @@ static drwav_bool32 luawav_seek_proc(void *userdata, int offset, drwav_seek_orig
     lua_rawgeti(u->L,LUA_REGISTRYINDEX, u->table_ref);
     lua_getfield(u->L,-1,"onSeek");
     lua_getfield(u->L,-2,"userData");
-    if(origin == drwav_seek_origin_start) {
-        lua_pushliteral(u->L,"set");
-    } else {
-        lua_pushliteral(u->L,"cur");
+    switch(origin) {
+        case DRWAV_SEEK_SET: lua_pushliteral(u->L, "set"); break;
+        case DRWAV_SEEK_CUR: lua_pushliteral(u->L, "cur"); break;
+        case DRWAV_SEEK_END: lua_pushliteral(u->L, "end"); break;
+        default: return 0;
     }
     lua_pushinteger(u->L,offset);
     lua_call(u->L,3,1);
     r = lua_toboolean(u->L,-1);
     lua_pop(u->L,2);
     return r;
+}
+
+static drwav_bool32 luawav_tell_proc(void* userdata, drwav_int64* pCursor) {
+    luawav_stream_userdata *u = (luawav_stream_userdata *)userdata;
+    lua_rawgeti(u->L,LUA_REGISTRYINDEX, u->table_ref);
+    lua_getfield(u->L,-1,"onSeek");
+    lua_getfield(u->L,-2,"userData");
+    lua_pushliteral(u->L, "cur");
+    lua_pushinteger(u->L,0);
+    lua_call(u->L,3,1);
+    *pCursor = (drwav_int64)lua_tointeger(u->L, -1);
+    lua_pop(u->L,2);
+    return 1;
 }
 
 static drwav_uint64
@@ -530,6 +544,7 @@ luawav_init_stream(lua_State *L, luawav_userdata *u) {
     drwav_uint32 flags = 0;
     drwav_read_proc onRead = luawav_read_proc;
     drwav_seek_proc onSeek = luawav_seek_proc;
+    drwav_tell_proc onTell = luawav_tell_proc;
     drwav_chunk_proc onChunk = NULL;
     void *pUserData = NULL;
     void *pChunkUserData = NULL;
@@ -577,6 +592,7 @@ luawav_init_stream(lua_State *L, luawav_userdata *u) {
     return drwav_init_ex(&u->wav,
       onRead,
       onSeek,
+      onTell,
       onChunk,
       pUserData,
       pChunkUserData,
@@ -945,13 +961,16 @@ static const luawav_const luawav_consts[] = {
     LUAWAV_CONST(DR_WAVE_FORMAT_MULAW),
     LUAWAV_CONST(DR_WAVE_FORMAT_DVI_ADPCM),
     LUAWAV_CONST(DR_WAVE_FORMAT_EXTENSIBLE),
-    LUAWAV_CONST(DRWAV_MAX_SMPL_LOOPS),
     LUAWAV_CONST(DRWAV_SEQUENTIAL),
-    LUAWAV_CONST(drwav_seek_origin_start),
-    LUAWAV_CONST(drwav_seek_origin_current),
+    LUAWAV_CONST(DRWAV_SEEK_SET),
+    LUAWAV_CONST(DRWAV_SEEK_CUR),
+    LUAWAV_CONST(DRWAV_SEEK_END),
     LUAWAV_CONST(drwav_container_riff),
     LUAWAV_CONST(drwav_container_w64),
     LUAWAV_CONST(drwav_container_rf64),
+    /* backwards compat */
+    { "drwav_seek_origin_start", DRWAV_SEEK_SET },
+    { "drwav_seek_origin_current", DRWAV_SEEK_CUR },
     { NULL, 0 },
 };
 
